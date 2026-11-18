@@ -75,5 +75,38 @@ npm run dev
 - 列表接口统一返回 `{ items, total, page, size }`，动作接口统一返回 `{ ok, message }`。
 - 状态流转只允许在 `app/services` 里改，路由层不做业务判断。
 
+## 评估看板聚合快照（消费范围裁剪 + V011 联动）
+
+评估看板不再跨消费范围合并实验数据。快照链路集中在
+`backend/app/services/board_snapshot/`：
+
+| 文件 | 职责 |
+| --- | --- |
+| `registry.py` | 消费范围注册表（成员名单/获准实验）+ V011 指标口径登记表，提供归属核对 |
+| `ab_source.py` | 带实验归属与指标版本标注的 AB 对比结果表，是快照的数据源 |
+| `snapshot_store.py` | current/staging/archive 三段式存储，保证原子发布、失败回滚与留档 |
+| `board_snapshot.py` | 裁剪聚合、V011 校验、版本冲突两种策略、只读消费等核心规则 |
+
+关键约束：
+
+- **按消费范围裁剪**：刷新时读取看板配置与 AB 对比结果表，只聚合获准实验；越权
+  实验进 `excluded_experiments` 留档，不进任何指标卡，成员聚合值与卡片成员数一致。
+- **归属核对/只读**：绑定、刷新、调整范围等写操作先核对操作者是否在范围成员内，
+  越权返回 403；消费端读取只返回已发布快照，不修改受控内容。
+- **版本同步发布**：消费范围版本 `scope_version` 与聚合版本 `snapshot_version` 在
+  同一把锁内原子提交，避免同一看板混入另一范围的成员。
+- **失败保留旧快照**：候选快照先入 staging，裁剪/校验/发布任一步失败即回滚，
+  current 保持上一份获准范围结果，绝不发布无范围限制的空壳。
+- **V011 跨模块联动**：卡片指标版本必须在口径登记表内，未登记口径（如 V099）的
+  卡片被拒绝并留痕；`/v011/verify` 按调用链逐卡核对，`/archive` 留档可查。
+- **版本冲突两策略**：范围调整与刷新并发时，`rebuild` 全量重建（只显示新范围完整
+  聚合）或 `incremental` 保留旧范围聚合并附待移除实验清单（`scope_consistent=false`）。
+
+接口前缀 `/api/evaluate_board`，主要端点：`/scopes`、`/v011/calibers`、
+`/boards`、`/boards/{id}`、`/boards/{id}/scope`、
+`/boards/{id}/snapshot`（GET 只读 / POST refresh）、
+`/boards/{id}/scope/adjust`、`/boards/{id}/archive`、`/boards/{id}/v011/verify`。
+前端「评估看板」页的侧栏列表与详情共用 `/boards` 同一组数据。
+
 领域：数据工程
 子方向：数据分析与数据应用
